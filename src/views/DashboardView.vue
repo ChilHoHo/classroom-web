@@ -36,6 +36,7 @@ const requests = ref([])
 const pendingRequests = computed(() => requests.value.filter((r) => r.status === 'pending'))
 const pendingCount = computed(() => pendingRequests.value.length)
 const courseFor = (id) => classes.value.find((c) => c.id === id)
+const scheduledClassIds = computed(() => new Set(sessions.value.map((session) => session.teaching_class_id)))
 const nextSession = (id) => sessions.value.find((s) => s.teaching_class_id === id && Date.parse(s.end_at) > clock.value)
 const shownClasses = computed(() => activeClasses.value.filter((c) => `${c.course_name} ${c.english_name || ''} ${c.name}`.toLowerCase().includes(search.value.toLowerCase())))
 const shownUsers = computed(() => users.value.filter((u) => u.username.toLowerCase().includes(search.value.toLowerCase())))
@@ -134,7 +135,21 @@ async function createTask() {
           :type="row.status === 'active' ? 'danger' : 'primary'" :disabled="saving"
           @click="changeAccountStatus(row, row.status === 'active' ? 'disabled' : 'active')"
         >{{ row.status === 'active' ? '停用' : '启用' }}</el-button></template></el-table-column></el-table></el-card>
-        <template v-if="section === 'courses'"><div class="section-heading"><h2>{{ role === 'student' ? '我的课程' : '教学班与课程安排' }}</h2><el-input v-model="search" class="search-input" placeholder="搜索课程或教学班" clearable /></div><div class="course-grid section-gap"><CourseCard v-for="c in shownClasses" :key="c.id" :course="c" :session="nextSession(c.id)" :now="clock" @details="details = $event" /></div><el-empty v-if="!shownClasses.length" :description="search ? '没有匹配的课程' : '暂无课程，添加课程或联系教师加入教学班'" /></template>
+        <template v-if="section === 'courses'">
+          <div class="section-heading">
+            <h2>{{ role === 'student' ? '我的课程' : '教学班与课程安排' }}</h2>
+            <el-input v-model="search" class="search-input" placeholder="搜索课程或教学班" clearable />
+          </div>
+          <div class="course-grid section-gap">
+            <CourseCard
+              v-for="course in shownClasses" :key="course.id" :course="course"
+              :session="nextSession(course.id)" :now="clock"
+              :has-scheduled-sessions="scheduledClassIds.has(course.id)"
+              @details="details = $event"
+            />
+          </div>
+          <el-empty v-if="!shownClasses.length" :description="search ? '没有匹配的课程' : '暂无课程，添加课程或联系教师加入教学班'" />
+        </template>
         <AttendancePanel v-if="section === 'attendance' && role !== 'admin'" :role="role" :classes="classes" :tasks="tasks" :records="records" @refresh="refresh" />
         <RequestPanel
           v-if="section === 'requests'" :admin="role === 'admin'"
