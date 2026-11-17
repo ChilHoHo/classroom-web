@@ -18,8 +18,8 @@ function image(req, _res, next) {
   if (!(png && file.mimetype === 'image/png') && !(jpeg && file.mimetype === 'image/jpeg')) fail(400, '图片内容与文件类型不一致')
   next()
 }
-async function hasConsent(studentId) {
-  const row = await db.get("SELECT decision FROM consent_records WHERE student_id=? AND consent_type='face' ORDER BY id DESC LIMIT 1", [studentId])
+async function hasConsent(studentId, current = false) {
+  const row = await db.get("SELECT decision FROM consent_records WHERE student_id=? AND consent_type='face' ORDER BY id DESC LIMIT 1" + (current ? db.lock : ''), [studentId])
   return row?.decision === 'agree'
 }
 async function removeProfile(req, studentId) {
@@ -58,7 +58,11 @@ faces.get('/faces/me', learner, async (req, res) => {
   const approvedAvatar = !!/^\/api\/avatar-images\/\d+$/.test(user.avatar || '')
   const expected = approvedAvatar ? avatarSubject(user).subject : null
   const consent = await hasConsent(s.id)
-  res.json({ consent, approvedAvatar, ready: consent && profile?.status === 'active' && profile.subject_key === expected, profile: profile ? { status: profile.status, registered_at: profile.registered_at, deleted_at: profile.deleted_at } : null })
+  let ready = false
+  if (consent && profile?.status === 'active' && profile.subject_key === expected) {
+    try { ready = await referenceExists(expected) } catch (error) { if (error.status !== 503) throw error }
+  }
+  res.json({ consent, approvedAvatar, ready, profile: profile ? { status: profile.status, registered_at: profile.registered_at, deleted_at: profile.deleted_at } : null })
 })
 faces.delete('/faces/me', learner, async (req, res) => {
   const s = await student(req)
@@ -71,17 +75,22 @@ function avatarSubject(user) {
   if (!match) fail(409, '请先上传头像并等待管理员审核通过', 'AVATAR_REQUIRED')
   return { imageId: Number(match[1]), subject: `avatar-${user.id}-${match[1]}` }
 }
+async function referenceExists(subject) {
+  const data = await faceRequest(`/faces?subject=${encodeURIComponent(subject)}&size=1`, null, 'GET')
+  if (!Array.isArray(data.faces)) fail(503, '无法确认远端识别资料，请稍后重试', 'FACE_UNAVAILABLE')
+  return data.faces.some(face => face.subject === subject && typeof face.image_id === 'string' && face.image_id)
+}
 async function registerApprovedAvatar(req, s) {
   const result = await db.transaction(async () => {
     const user = await db.get('SELECT id,avatar,status FROM users WHERE id=?' + db.lock, [req.user.id])
     if (user?.status !== 'active') fail(403, '账号不可用')
     await db.get('SELECT id FROM students WHERE id=?' + db.lock, [s.id])
-    if (!await hasConsent(s.id)) fail(403, '请先单独同意人脸信息处理', 'CONSENT_REQUIRED')
+    if (!await hasConsent(s.id, true)) fail(403, '请先单独同意人脸信息处理', 'CONSENT_REQUIRED')
     const { imageId, subject } = avatarSubject(user)
     const image = await db.get('SELECT mime_type,image_data FROM avatar_images WHERE id=? AND user_id=?', [imageId, user.id])
     if (!image) fail(409, '审核头像不可用，请重新提交头像申请', 'AVATAR_REQUIRED')
-    let profile = await db.get('SELECT * FROM face_profiles WHERE student_id=?', [s.id])
-    if (profile?.status === 'active' && profile.subject_key === subject) return { profile }
+    let profile = await db.get('SELECT * FROM face_profiles WHERE student_id=?' + db.lock, [s.id])
+    if (profile?.status === 'active' && profile.subject_key === subject && await referenceExists(subject)) return { profile }
     const oldSubject = profile?.subject_key
     if (!profile) {
       const row = await db.run("INSERT INTO face_profiles(student_id,subject_key,status) VALUES (?,?,'pending_delete')", [s.id, subject])
@@ -135,13 +144,18 @@ faces.post('/attendance-tasks/:id/check-in', learner, androidOnly, upload, image
     if (error.status !== 422) throw error // Outages must not consume a student's attempt.
     failure = error
   }
+  // A sample may have disappeared after registration but before recognition.
+  // Do not consume the student's attempt as a mismatch in that case.
+  if ((failure || !result.matched) && !await referenceExists(profile.subject_key)) {
+    fail(503, '人脸识别资料暂不可用，请重试', 'FACE_UNAVAILABLE')
+  }
   const record = await db.transaction(async () => {
     const task = await eligible(taskId, s.id, true)
     const user = await db.get('SELECT id,avatar,status FROM users WHERE id=?' + db.lock, [req.user.id])
     if (user?.status !== 'active' || avatarSubject(user).subject !== profile.subject_key) fail(409, '头像已变更，请重新签到', 'AVATAR_CHANGED')
     await db.get('SELECT id FROM students WHERE id=?' + db.lock, [s.id])
-    const current = await db.get("SELECT id,registered_at FROM face_profiles WHERE id=? AND status='active'", [profile.id])
-    if (!await hasConsent(s.id) || !current || current.registered_at !== profile.registered_at) fail(409, '人脸授权或资料已变更，请重新提交')
+    const current = await db.get("SELECT id,registered_at FROM face_profiles WHERE id=? AND status='active'" + db.lock, [profile.id])
+    if (!await hasConsent(s.id, true) || !current || current.registered_at !== profile.registered_at) fail(409, '人脸授权或资料已变更，请重新提交')
     const checkedAt = now()
     const status = failure || !result.matched ? 'exception' : checkedAt >= task.late_at ? 'late' : 'present'
     const row = await db.run("INSERT INTO attendance_records(task_id,student_id,status,similarity,source,checked_at) VALUES (?,?,?,?,'face',?)", [taskId, s.id, status, result?.similarity ?? null, checkedAt])

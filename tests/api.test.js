@@ -25,6 +25,8 @@ const faceServer = createServer(async (req, res) => {
   if (faceMode === 'unavailable') { res.writeHead(503).end('{}'); return }
   const url = new URL(req.url, 'http://localhost')
   if (req.method === 'DELETE') return res.end('{}')
+  if (req.method === 'GET' && url.pathname.endsWith('/faces'))
+    return res.end(JSON.stringify({ faces: subject === url.searchParams.get('subject') ? [{ subject, image_id: 'test-image' }] : [] }))
   if (url.pathname.endsWith('/faces')) {
     subject = url.searchParams.get('subject')
     return res.end(JSON.stringify({ subject, image_id: 'test-image' }))
@@ -185,6 +187,7 @@ test('face consent, upload validation, registration and duplicate concurrency', 
   await other.request(`/attendance-tasks/${taskId}/records`, 'GET', undefined, 403)
 })
 test('exceptions, outages, review trail, manual alternative, finalization and CSV', async () => {
+  await teacher.request(`/attendance-tasks/${taskId}/end`, 'POST', {})
   for (const [mode, code] of [['multiple', 'MULTIPLE_FACES'], ['none', 'NO_FACE'], ['low', 'LOW_SIMILARITY']]) {
     faceMode = mode
     const task = await teacher.request('/attendance-tasks', 'POST', taskBody(), 201)
@@ -194,12 +197,14 @@ test('exceptions, outages, review trail, manual alternative, finalization and CS
     await teacher.request(`/attendance-records/${result.id}/review`, 'PATCH', { status: 'present', reason: '' }, 400)
     await teacher.request(`/attendance-records/${result.id}/review`, 'PATCH', { status: 'present', reason: '现场确认本人到场' })
     assert.equal((await db.get('SELECT before_status FROM review_records WHERE attendance_record_id=?', [result.id])).before_status, 'exception')
+    await teacher.request(`/attendance-tasks/${task.id}/end`, 'POST', {})
   }
   faceMode = 'unavailable'
   const task = await teacher.request('/attendance-tasks', 'POST', taskBody(), 201)
   await learner.request(`/attendance-tasks/${task.id}/check-in`, 'POST', photo(), 503)
   assert.equal(await db.get('SELECT id FROM attendance_records WHERE task_id=?', [task.id]), undefined)
   await teacher.request(`/attendance-tasks/${task.id}/manual`, 'POST', { student_id: studentId, reason: '服务故障，现场核对', status: 'manual' }, 201)
+  await teacher.request(`/attendance-tasks/${task.id}/end`, 'POST', {})
   faceMode = 'match'
   const ending = await teacher.request('/attendance-tasks', 'POST', taskBody(), 201)
   await teacher.request(`/attendance-tasks/${ending.id}/end`, 'POST', {})

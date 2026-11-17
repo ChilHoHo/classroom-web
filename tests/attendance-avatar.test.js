@@ -5,15 +5,18 @@ import { base, db, client, createUser } from './helpers/account-api.js'
 process.env.COMPREFACE_URL = 'http://attendance-face.test'
 process.env.COMPREFACE_API_KEY = 'test'
 const realFetch = globalThis.fetch
-let subject, registeredBytes, mode = 'match', registrations = 0, changeDuringRecognition
+let subject, registeredBytes, mode = 'match', registrations = 0, changeDuringRecognition, sampleMissing = false
 const jpeg = Buffer.from([255,216,255,3,4])
 globalThis.fetch = async (url, options) => {
   if (!String(url).startsWith(process.env.COMPREFACE_URL)) return realFetch(url, options)
   const u = new URL(url)
   if (mode === 'outage') return Response.json({}, { status: 503 })
   if (options.method === 'DELETE') return Response.json({})
+  if (options.method === 'GET' && u.pathname.endsWith('/faces'))
+    return Response.json({ faces: !sampleMissing && subject === u.searchParams.get('subject') ? [{ subject, image_id: 'registered' }] : [] })
   if (u.pathname.endsWith('/faces')) {
     registrations++; subject = u.searchParams.get('subject')
+    sampleMissing = false
     registeredBytes = Buffer.from(await options.body.get('file').arrayBuffer())
     return Response.json({ subject, image_id: 'registered' })
   }
@@ -32,13 +35,20 @@ test('Android-only attendance uses approved avatar, complete roster, updates, fa
   await createUser('attendance_missing', 'Password123', 'student')
   await web.login('attendance_student')
   await android.request('/android/auth/login', 'POST', { username: 'attendance_student', password: 'Password123', code: await android.captcha() })
+  await web.request('/android/push-token', 'POST', { token: 'not-an-android-session' }, 403)
+  await android.request('/android/push-token', 'POST', { token: 'test-device-token' })
   const tid = (await db.get('SELECT id FROM teachers WHERE user_id=(SELECT id FROM users WHERE username=?)', ['attendance_teacher'])).id
   const sid = (await db.get('SELECT id FROM students WHERE user_id=?', [uid])).id
   const missing = (await db.get('SELECT id FROM students WHERE user_id=(SELECT id FROM users WHERE username=?)', ['attendance_missing'])).id
   const course = await admin.request('/courses', 'POST', { course_code: 'FACE1', course_name: '人脸签到课' }, 201)
   const cls = await admin.request('/teaching-classes', 'POST', { course_id: course.id, teacher_id: tid, term: '2026秋', name: '签到班' }, 201)
   for (const student_id of [sid, missing]) await teacher.request(`/teaching-classes/${cls.id}/enrollments`, 'POST', { student_id }, 201)
-  async function task() { return teacher.request('/attendance-tasks', 'POST', { teaching_class_id: cls.id, start_at: new Date(Date.now()-1000).toISOString(), late_at: new Date(Date.now()+30000).toISOString(), end_at: new Date(Date.now()+60000).toISOString() }, 201) }
+  let previousTask
+  async function task() {
+    if (previousTask) await teacher.request(`/attendance-tasks/${previousTask.id}/end`, 'POST', {})
+    previousTask = await teacher.request('/attendance-tasks', 'POST', { teaching_class_id: cls.id, start_at: new Date(Date.now()-1000).toISOString(), late_at: new Date(Date.now()+30000).toISOString(), end_at: new Date(Date.now()+60000).toISOString() }, 201)
+    return previousTask
+  }
   async function check(c, taskId, expected) {
     const body = new FormData(); body.append('file', new Blob([jpeg], { type: 'image/jpeg' }), 'live.jpg')
     const response = await realFetch(`${base}/attendance-tasks/${taskId}/check-in`, { method: 'POST', headers: { Cookie: c.cookie, 'X-Client-Type': 'android' }, body })
@@ -51,6 +61,12 @@ test('Android-only attendance uses approved avatar, complete roster, updates, fa
     return img.insertId
   }
   const t = await task()
+  assert.equal((await db.get('SELECT status FROM push_deliveries WHERE task_id=?', [t.id])).status, 'pending')
+  const oldPushSession = (await db.get('SELECT session_id FROM push_devices WHERE user_id=?', [uid])).session_id
+  await android.request('/auth/refresh', 'POST', {})
+  const newPushSession = (await db.get('SELECT session_id FROM push_devices WHERE user_id=?', [uid])).session_id
+  assert.notEqual(newPushSession, oldPushSession)
+  assert.equal((await db.get('SELECT session_id FROM push_deliveries WHERE task_id=?', [t.id])).session_id, newPushSession)
   let roster = await teacher.request(`/attendance-tasks/${t.id}/records`)
   assert.equal(roster.total, 2); assert.equal(roster.counts.unrecorded, 2)
   await otherTeacher.request(`/attendance-tasks/${t.id}/records`, 'GET', undefined, 403)
@@ -66,12 +82,24 @@ test('Android-only attendance uses approved avatar, complete roster, updates, fa
   assert.ok(registeredBytes.equals(approved))
   assert.equal((await android.request('/faces/me')).ready, true)
   await check(android, t.id, 201); await check(android, t.id, 409)
+  assert.equal((await android.request('/attendance-tasks/available')).items.length, 0)
+  assert.ok((await web.request('/notifications')).items.some(item => item.message.includes('已发起人脸考勤')))
+  await teacher.request('/attendance-tasks', 'POST', { teaching_class_id: cls.id, start_at: new Date(Date.now()-1000).toISOString(), late_at: new Date(Date.now()+30000).toISOString(), end_at: new Date(Date.now()+60000).toISOString() }, 409)
   roster = await teacher.request(`/attendance-tasks/${t.id}/records`)
   assert.equal(roster.counts.present, 1); assert.equal(roster.counts.unrecorded, 1)
+  const revised = await teacher.request(`/attendance-tasks/${t.id}/manual`, 'POST', { student_id: sid, status: 'late', reason: '教师核对' })
+  assert.ok(revised.id)
+  assert.equal((await db.get('SELECT after_status FROM review_records WHERE attendance_record_id=?', [revised.id])).after_status, 'late')
   const replacement = Buffer.from([255,216,255,8,8]); await approve(replacement)
   assert.equal((await android.request('/faces/me')).ready, false)
   const second = await task(); await check(android, second.id, 201)
   assert.ok(registeredBytes.equals(replacement)); assert.equal(registrations, 2)
+  sampleMissing = true
+  assert.equal((await android.request('/faces/me')).ready, false)
+  const recovered = await task()
+  const beforeRecovery = registrations
+  await check(android, recovered.id, 201)
+  assert.equal(registrations, beforeRecovery + 1)
   mode = 'other'; const bad = await task(); assert.equal((await check(android, bad.id, 202)).status, 'exception')
   mode = 'outage'; const outage = await task(); await check(android, outage.id, 503)
   assert.equal(await db.get('SELECT id FROM attendance_records WHERE task_id=?', [outage.id]), undefined)
@@ -81,6 +109,8 @@ test('Android-only attendance uses approved avatar, complete roster, updates, fa
   assert.equal(await db.get('SELECT id FROM attendance_records WHERE task_id=?', [race.id]), undefined)
   await teacher.request(`/attendance-tasks/${t.id}/end`, 'POST', {})
   roster = await teacher.request(`/attendance-tasks/${t.id}/records`)
-  assert.equal(roster.counts.absent, 1); assert.equal(roster.counts.present, 1)
+  assert.equal(roster.counts.absent, 1); assert.equal(roster.counts.late, 1)
   await check(android, t.id, 409)
+  await android.request('/auth/logout', 'POST', {})
+  assert.equal(await db.get('SELECT id FROM push_devices WHERE user_id=?', [uid]), undefined)
 })

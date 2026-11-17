@@ -48,8 +48,10 @@ test('teacher launches attendance, sees full roster, refreshes, searches and fin
   await page.locator('.record-filters .el-select .el-select__clear').click()
   await mkdir('test-results/attendance', { recursive: true })
   await page.screenshot({ path: 'test-results/attendance/teacher-roster.png', fullPage: true })
+  await page.locator('.el-dialog__headerbtn').first().click()
   await page.getByRole('button', { name: '结束', exact: true }).click()
   await page.getByRole('button', { name: /确定|OK|Confirm/i }).click()
+  await page.getByRole('button', { name: '记录 / 复核', exact: true }).click()
   await expect(page.getByRole('cell', { name: '缺勤', exact: true })).toHaveCount(1)
   await expect(page.getByRole('cell', { name: '未签到', exact: true })).toHaveCount(0)
   if (errors.length) throw new Error(errors.join('\n'))
@@ -67,8 +69,10 @@ test('slow roster polling stays single-flight and stale manual dialogs cannot cr
   const course = await admin.request('/courses', 'POST', { course_code: 'POLL_RACE', course_name: '慢请求测试课程' }, 201)
   const cls = await admin.request('/teaching-classes', 'POST', { course_id: course.id, teacher_id: tid, term: '2026秋', name: '并发测试班' }, 201)
   await teacher.request(`/teaching-classes/${cls.id}/enrollments`, 'POST', { student_id: sid }, 201)
-  for (let i = 0; i < 2; i++) await teacher.request('/attendance-tasks', 'POST', {
-    teaching_class_id: cls.id, start_at: new Date(Date.now() - 1000).toISOString(),
+  const cls2 = await admin.request('/teaching-classes', 'POST', { course_id: course.id, teacher_id: tid, term: '2026秋', name: '另一个测试班' }, 201)
+  await teacher.request(`/teaching-classes/${cls2.id}/enrollments`, 'POST', { student_id: sid }, 201)
+  for (const classroom of [cls, cls2]) await teacher.request('/attendance-tasks', 'POST', {
+    teaching_class_id: classroom.id, start_at: new Date(Date.now() - 1000).toISOString(),
     late_at: new Date(Date.now() + 300000).toISOString(), end_at: new Date(Date.now() + 600000).toISOString(),
   }, 201)
   const tasks = (await teacher.request('/attendance-tasks')).items
@@ -92,13 +96,14 @@ test('slow roster polling stays single-flight and stale manual dialogs cannot cr
   })
   await page.getByRole('button', { name: '人工登记 / 请假', exact: true }).click()
   await started
+  await page.locator('.el-dialog__headerbtn').first().click()
   await page.getByRole('button', { name: '记录 / 复核', exact: true }).nth(1).click()
-  await expect(page.getByRole('heading', { name: `任务 #${tasks[1].id} · 考勤记录`, exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: `任务 #${tasks[1].id}，考勤记录`, exact: true })).toBeVisible()
   const memberResponse = page.waitForResponse(response => response.url().endsWith('/enrollments'))
   releaseMembers()
   await memberResponse
   await page.waitForTimeout(250)
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: '人工登记 / 请假' })).toHaveCount(0)
   await page.unroute('**/api/teaching-classes/*/enrollments')
 
   let active = 0, maxActive = 0
