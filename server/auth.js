@@ -4,7 +4,7 @@ import svgCaptcha from 'svg-captcha'
 import { promisify } from 'node:util'
 import db from './db/db.js'
 import { reservePersonnelNumber } from './db/personnel-numbers.js'
-import { submitRequest } from './requests.js'
+import { recordRequestReview, submitRequest } from './requests.js'
 import { authenticate, audit, fail, string, roles, choice, id } from './http.js'
 import { createAuthLimiter } from './auth-limits.js'
 import { captchaDigest, verifyCaptcha } from './captcha.js'
@@ -29,7 +29,16 @@ export async function createUser(username, password, role, status = 'active', pr
       ? await db.run('INSERT INTO users(username,password,password_hash,role,status) VALUES (?,?,?,?,?)', [username, hash, hash, role, status])
       : await db.run('INSERT INTO users(username,password_hash,role,status) VALUES (?,?,?,?)', [username, hash, role, status])
     if (role === 'student') await db.run('INSERT INTO students(user_id,student_no,name) VALUES (?,?,?)', [result.insertId, profile.number || username, profile.name || username])
-    if (role === 'teacher') await db.run('INSERT INTO teachers(user_id,teacher_no,name) VALUES (?,?,?)', [result.insertId, profile.number || username, profile.name || username])
+    if (role === 'teacher') {
+      const number = profile.number || username
+      const name = profile.name || username
+      await db.run('INSERT INTO teachers(user_id,teacher_no,name) VALUES (?,?,?)', [result.insertId, number, name])
+      if (status === 'pending') {
+        await submitRequest({ user: { id: result.insertId } }, 'teacher_registration', result.insertId, {
+          name, teacher_no: number,
+        })
+      }
+    }
     return result.insertId
   })
 }
@@ -164,6 +173,13 @@ auth.patch('/users/:id', authenticate, roles('admin'), async (req, res) => {
     const target = await db.get('SELECT id,role,status FROM users WHERE id=?' + db.lock, [userId])
     if (!target || target.status === 'deleted') fail(404, '账号不存在')
     if (target.role === 'admin') fail(403, '此接口不能停用管理员')
+    if (target.role === 'teacher' && target.status === 'pending') {
+      const request = await db.get(`SELECT id FROM change_requests
+        WHERE user_id=? AND kind='teacher_registration' AND status='pending'` + db.lock, [userId])
+      if (!request) fail(409, '待审核的教师注册申请不存在')
+      const decision = status === 'active' ? 'approved' : 'rejected'
+      await recordRequestReview(req, request.id, decision, '管理员通过账号状态接口处理')
+    }
     await db.run('UPDATE users SET status=? WHERE id=?', [status, userId])
     if (status === 'disabled') await revokeUserSessions(userId)
     await audit(req, 'user.status', 'users', userId)

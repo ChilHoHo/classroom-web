@@ -16,6 +16,8 @@ const captchaImage = ref('')
 const resetMode = ref(false)
 const form = reactive({ number: '', name: '', username: '', password: '', confirmPassword: '', role: 'student', code: '' })
 const isRegister = props.mode === 'register'
+const codeLength = 5
+const isCodeCharacter = (value) => /^[A-Za-z0-9]$/.test(value)
 
 async function refreshCaptcha(force = false) {
   if (refreshing.value || (busy.value && !force)) return
@@ -34,8 +36,12 @@ async function refreshCaptcha(force = false) {
 async function submit() {
   if (busy.value || refreshing.value || !captchaImage.value) return
   const username = form.username.trim()
-  if (!username || (!resetMode.value && !form.password) || !form.code.trim()) {
-    ElMessage.error('请输入账号、密码和验证码')
+  if (!username || (!resetMode.value && !form.password)) {
+    ElMessage.error(resetMode.value ? '请输入账号' : '请输入账号和密码')
+    return
+  }
+  if (form.code.length !== codeLength) {
+    ElMessage.error('请输入完整验证码')
     return
   }
   if ((isRegister || resetMode.value) && (!form.number.trim() || !form.name.trim())) return ElMessage.error('请输入学号 / 工号和姓名')
@@ -105,12 +111,19 @@ onMounted(refreshCaptcha)
           <el-alert v-if="resetMode" title="提交后需等待管理员重置密码" type="warning" :closable="false" />
           <el-form-item label="验证码">
             <div class="captcha-group">
-              <el-input v-model="form.code" maxlength="5" placeholder="输入图中字符" aria-label="验证码" size="large" :disabled="busy || refreshing" autocomplete="off" />
-              <div class="captcha-art">
+              <el-input-otp
+                v-model="form.code" :length="codeLength" size="large"
+                :validator="isCodeCharacter" inputmode="text"
+                :disabled="busy || refreshing || !captchaImage"
+              />
+              <button
+                type="button" class="captcha-art"
+                aria-label="刷新验证码" title="点击图片刷新验证码"
+                :disabled="busy || refreshing" @click="refreshCaptcha()"
+              >
                 <img v-if="captchaImage" :src="captchaImage" alt="登录注册验证码" />
-                <span v-else>正在加载验证码…</span>
-                <el-button link class="captcha-refresh" :loading="refreshing" :disabled="busy" @click="refreshCaptcha()">刷新验证码</el-button>
-              </div>
+                <span v-else>{{ refreshing ? '正在加载…' : '重新加载' }}</span>
+              </button>
             </div>
           </el-form-item>
         <div class="button-group">

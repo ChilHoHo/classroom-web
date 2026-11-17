@@ -13,6 +13,14 @@ export async function submitRequest(req, kind, targetId, payload) {
   })
 }
 
+export async function recordRequestReview(req, requestId, status, note) {
+  await db.run(
+    'UPDATE change_requests SET status=?,review_note=?,reviewer_id=?,reviewed_at=? WHERE id=?',
+    [status, note, req.user.id, now(), requestId],
+  )
+  await audit(req, `request.${status}`, 'change_requests', requestId)
+}
+
 export async function notifyClass(classId, message) {
   const c = await db.get('SELECT co.course_name,c.name FROM teaching_classes c JOIN courses co ON co.id=c.course_id WHERE c.id=?', [classId])
   await db.run(`INSERT INTO notifications(user_id,message,created_at)

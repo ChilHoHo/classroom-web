@@ -55,7 +55,8 @@ async function login(username, password = 'Password123', mobile = false) {
   await db.run('UPDATE captchas SET text=? WHERE session_id=?', [captchaDigest('ABCDE'), sid])
   await page.getByPlaceholder('输入用户名', { exact: true }).fill(username)
   await page.getByPlaceholder('请输入密码', { exact: true }).fill(password)
-  await page.getByRole('textbox', { name: '验证码', exact: true }).fill('ABCDE')
+  const captcha = page.getByRole('group', { name: '验证码', exact: true })
+  await captcha.getByRole('textbox').first().fill('ABCDE')
   await page.getByRole('button', { name: '登录', exact: true }).click()
   await expect(page).toHaveURL(/dashboard/)
   return { page, context }

@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs'
 import db from './db/db.js'
 import { authenticate, roles, id, string, choice, fail, audit, now } from './http.js'
 import { validatePassword, revokeUserSessions } from './auth.js'
-import { submitRequest } from './requests.js'
+import { recordRequestReview, submitRequest } from './requests.js'
 import { scheduleActions } from './scheduling.js'
 import { removeEnrollment } from './enrollments.js'
 
@@ -25,12 +25,23 @@ workflows.get('/requests', async (req, res) => {
 workflows.patch('/requests/:id', roles('admin'), async (req, res) => {
   const status = choice(req.body.status, ['approved', 'rejected'])
   const note = string(req.body.note, '审核说明', 500)
+  const requestId = id(req.params.id)
+  const request = await db.get('SELECT user_id FROM change_requests WHERE id=?', [requestId])
+  if (!request) fail(404, '申请不存在')
   const result = await db.transaction(async () => {
-    const row = await db.get('SELECT * FROM change_requests WHERE id=?' + db.lock, [id(req.params.id)])
+    const applicant = await db.get('SELECT * FROM users WHERE id=?' + db.lock, [request.user_id])
+    const row = await db.get('SELECT * FROM change_requests WHERE id=?' + db.lock, [requestId])
     if (!row) fail(404, '申请不存在')
     if (row.status !== 'pending') fail(409, '申请已经处理')
     if (row.kind === 'password_reset' && status === 'approved') fail(409, '密码重置申请请在用户管理中重设密码并解禁')
-    const applicant = await db.get('SELECT * FROM users WHERE id=?' + db.lock, [row.user_id])
+    if (row.kind === 'teacher_registration') {
+      if (applicant.role !== 'teacher' || applicant.status !== 'pending') fail(409, '教师账号已处理')
+      const accountStatus = status === 'approved' ? 'active' : 'disabled'
+      await db.run('UPDATE users SET status=? WHERE id=?', [accountStatus, applicant.id])
+      if (accountStatus === 'disabled') await revokeUserSessions(applicant.id)
+      await recordRequestReview(req, row.id, status, note)
+      return {}
+    }
     let applied = {}
     if (status === 'approved') {
       if (applicant.status !== 'active') fail(409, '申请人账号非正常状态，不能批准')
@@ -59,8 +70,7 @@ workflows.patch('/requests/:id', roles('admin'), async (req, res) => {
       const imageId = id(JSON.parse(row.payload).imageId)
       await db.run('DELETE FROM avatar_images WHERE id=? AND user_id=?', [imageId, applicant.id])
     }
-    await db.run('UPDATE change_requests SET status=?,review_note=?,reviewer_id=?,reviewed_at=? WHERE id=?', [status, note, req.user.id, now(), row.id])
-    await audit(req, `request.${status}`, 'change_requests', row.id)
+    await recordRequestReview(req, row.id, status, note)
     return applied
   })
   res.json({ success: true, ...result })
@@ -72,6 +82,7 @@ workflows.post('/users/:id/reset-password', roles('admin'), async (req, res) => 
     const target = await db.get('SELECT * FROM users WHERE id=?' + db.lock, [id(req.params.id)])
     if (!target || target.status === 'deleted') fail(404, '账号不存在')
     if (!['teacher', 'student'].includes(target.role)) fail(403, '此接口仅适用于教师和学生')
+    if (target.status === 'pending') fail(409, '请先审核教师注册申请')
     const request = await db.get(`SELECT id FROM change_requests
       WHERE user_id=? AND kind='password_reset' AND status='pending'` + db.lock, [target.id])
     if (!request) fail(409, '该用户没有待处理的密码重置申请')

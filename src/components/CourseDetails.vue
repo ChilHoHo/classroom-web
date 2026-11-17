@@ -11,17 +11,19 @@ watch(() => props.course?.id, () => { tab.value = 'schedule' })
 
 <template>
   <el-drawer
-    :model-value="!!course" :title="`${course?.course_name || ''} · 课程安排`"
+    :model-value="!!course" :title="course ? `${course.course_name}的课程安排` : '课程安排'"
     size="min(820px, 100vw)" class="course-details" @close="emit('close')"
   >
     <section v-if="course" class="detail-content">
-      <p class="course-meta">{{ course.english_name }} · {{ course.teacher_name }} · 北京时间</p>
+      <div v-if="course.english_name || course.teacher_name" class="course-meta">
+        <span v-if="course.english_name" lang="en">{{ course.english_name }}</span>
+        <span v-if="course.teacher_name">授课教师：{{ course.teacher_name }}</span>
+      </div>
       <div v-if="role !== 'student'" class="course-actions">
         <el-button type="primary" :disabled="busy || course.status !== 'active'" @click="emit('edit', null)">
           修改后续课程安排
         </el-button>
         <el-button :disabled="busy || course.status !== 'active'" @click="emit('add-student')">添加学生</el-button>
-        <el-button :disabled="busy" @click="tab = 'students'">学生名单</el-button>
         <el-button
           v-if="role === 'admin'" type="danger" plain
           :disabled="busy || course.status !== 'active'" @click="emit('archive')"
@@ -49,7 +51,15 @@ watch(() => props.course?.id, () => { tab.value = 'schedule' })
 :global(.course-details .el-drawer__title) { overflow-wrap: anywhere; line-height: 1.5; }
 :global(.course-details .el-drawer__body) { padding: 0 24px 24px; min-width: 0; }
 .detail-content { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
-.course-meta { margin: 0; color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
+.course-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
 .course-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .course-actions .el-button { margin: 0; min-height: 40px; max-width: 100%; white-space: normal; height: auto; }
 .detail-tabs { width: 100%; min-width: 0; }

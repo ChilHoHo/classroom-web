@@ -6,6 +6,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { schema } from './schema.js'
 import { initializePersonnelNumbers } from './personnel-numbers.js'
 import { initializeSessions } from './session-migration.js'
+import { backfillTeacherRegistrations } from './teacher-registration-migration.js'
 
 const context = new AsyncLocalStorage()
 const mysql = process.env.DB_DRIVER === 'mysql'
@@ -96,6 +97,7 @@ await db.run("INSERT INTO students(user_id,student_no,name,class_name) SELECT id
 await db.run("INSERT INTO teachers(user_id,teacher_no,name) SELECT id,username,username FROM users WHERE role='teacher' AND id NOT IN (SELECT user_id FROM teachers)")
 await initializePersonnelNumbers(db)
 await initializeSessions(db)
+await backfillTeacherRegistrations(db)
 const enrollmentColumns = mysql ? await db.all('SHOW COLUMNS FROM enrollments') : await db.all('PRAGMA table_info(enrollments)')
 if (!enrollmentColumns.some(column => (column.name || column.Field) === 'revision')) {
   await db.run('ALTER TABLE enrollments ADD COLUMN revision INTEGER NOT NULL DEFAULT 1')

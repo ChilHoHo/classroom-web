@@ -133,7 +133,7 @@ scheduling.patch('/course-sessions/:id', teacher, action('session_update', async
     if (c.status !== 'active' || s.start_at <= now() || sessions[0].start_at <= now()) fail(409, '只能调整尚未开始的有效课程')
     if (req.user.role === 'teacher' && !req.approved) return submitRequest(req, 'session_update', s.id, req.body)
     await saveSessions(c.id, sessions.map((v) => ({ ...v, reason })), c.teacher_id, s.id)
-    await notifyClass(c.id, `课次已调整至 ${new Date(Date.parse(sessions[0].start_at) + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ')}（北京时间），地点：${sessions[0].location}。原因：${reason}`)
+    await notifyClass(c.id, `课次已调整至 ${new Date(Date.parse(sessions[0].start_at) + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ')}，地点：${sessions[0].location}。原因：${reason}`)
     await audit(req, 'schedule.reschedule', 'course_sessions', s.id)
   })
   res.status(result?.requiresApproval ? 202 : 200).json(result || { success: true })

@@ -3,3 +3,7 @@ export const statusNames = { active: '正常', pending: '待审核', disabled: '
 export const dateKey = (value) => new Date(new Date(value).getTime() + 8 * 3600000).toISOString().slice(0, 10)
 export const formatTime = (value) => new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))
 export const formatDate = (value) => new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date(value))
+
+export function courseClassLabel({ course_name, name }) {
+  return name && name !== course_name ? `${course_name}（${name}）` : course_name
+}
