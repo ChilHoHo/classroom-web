@@ -57,7 +57,7 @@ async function save() {
       </template>
       <el-alert v-if="course && !session" title="将替换未开始的课次" type="warning" :closable="false" show-icon />
       <div class="form-grid">
-        <el-form-item label="上课日期（北京时间）" required><el-date-picker v-model="form.schedule.date" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" /></el-form-item>
+        <el-form-item label="上课日期" required><el-date-picker v-model="form.schedule.date" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" /></el-form-item>
         <el-form-item label="上课地点" prop="schedule.location" :rules="required('请输入上课地点')"><el-input v-model="form.schedule.location" placeholder="例如：第一教学楼 1001" maxlength="100" /></el-form-item>
         <el-form-item label="开始时间" required><el-time-picker v-model="form.schedule.start" format="HH:mm" value-format="HH:mm" placeholder="开始时间" /></el-form-item>
         <el-form-item label="结束时间" required><el-time-picker v-model="form.schedule.end" format="HH:mm" value-format="HH:mm" placeholder="结束时间" /></el-form-item>

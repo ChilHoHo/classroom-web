@@ -33,20 +33,22 @@ Web 使用 `credentials: 'include'`；Android 使用持久 CookieJar。认证采
 | GET | `/profile` | 查询本人资料（管理员返回 null） |
 | POST | `/profile/name-request` | 学生 / 教师提交 `{name}`，返回 202 |
 | GET | `/requests` | 管理员看全部申请，其他人仅看本人；payload 为解析后的对象 |
-| PATCH | `/requests/{id}` | 管理员提交 `{status: approved/rejected,note}`；重置密码申请可拒绝，批准须走专用重设密码接口 |
+| PATCH | `/requests/{id}` | 管理员提交 `{status: approved/rejected,note}`；批准教师注册会启用账号，拒绝会停用账号；重置密码申请可拒绝，批准须走专用重设密码接口 |
 | POST | `/auth/reset-request` | 无需登录，提交 `{username,role,number,name,code}`；role 仅 student/teacher；资料匹配后返回 202，撤销所有会话并阻止原密码登录；每账号 24 小时限一次（429） |
 | POST | `/users/{id}/reset-password` | 管理员提交 `{password}`，仅限存在 pending 密码重置申请的学生 / 教师；否则 409，已移除返回 404；重设密码、解禁、完成申请并撤销全部会话 |
 | GET | `/schedule` | 按角色和选课关系查询课程与课次 |
 | POST | `/scheduled-courses` | 教师提交 `{course_name,english_name,name,term,schedule}` |
 | PUT | `/scheduled-courses/{id}` | 教师申请 / 管理员直接替换后续安排，上述字段加必填 reason |
-| PATCH | `/course-sessions/{id}` | 教师申请 / 管理员直接调单次课，提交 `{date,start,end,location,reason}`（北京时间） |
+| PATCH | `/course-sessions/{id}` | 教师申请 / 管理员直接调单次课，提交 `{date,start,end,location,reason}`（UTC+8） |
 | POST | `/scheduled-courses/{id}/cancel` | 教师申请 / 管理员直接取消整个教学班，提交 `{reason}` |
 | GET | `/student-candidates?q=...` | 教师 / 管理员按部分学号或姓名模糊查询最多 20 个有效学生；空查询不返回候选，通配符按普通字符处理；返回 id、student_no、name |
 | POST | `/scheduled-courses/{id}/students` | 教师 / 管理员按 `{student_no}` 添加学生；教师仅限本人课程 |
 | GET | `/notifications` | 学生查询本人所有未关闭课程通知 |
 | PATCH | `/notifications/{id}/close` | 学生手动关闭本人通知，无需 body |
 
-schedule 字段为 `{date,start,end,location,repeat,interval?,weekdays?,until?}`；repeat 为 once / daily / weekly，日期为 YYYY-MM-DD、时间为 HH:mm，weekdays 使用 0–6（周日–周六），统一北京时间。Web 新建课程默认 weekly，单次调课仍为 once；API 仍须明确提交 repeat。
+schedule 字段为 `{date,start,end,location,repeat,interval?,weekdays?,until?}`；repeat 为 once / daily / weekly，日期为 YYYY-MM-DD、时间为 HH:mm，weekdays 使用 0–6（周日–周六），统一使用 UTC+8。Web 新建课程默认 weekly，单次调课仍为 once；API 仍须明确提交 repeat。
+
+教师注册会创建 `teacher_registration` 申请，payload 包含 `name` 和 `teacher_no`。升级时会为仍待审核的教师补建申请。旧客户端使用 `PATCH /users/{id}` 处理待审核教师时也会更新对应申请并留下审核记录。
 
 申请状态为 pending / approved / rejected；审核须填写说明，已处理申请不能重复审核。批准课程申请时重新检查权限、有效状态、未来时间及冲突。密码重置申请不影响管理员通过 `PATCH /users/{id}` 独立启用或停用账号。
 

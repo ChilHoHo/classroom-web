@@ -3,12 +3,14 @@ import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api.js'
+import { dateKey, formatTime } from '@/dashboard.js'
 const props = defineProps({ admin: Boolean, requests: { type: Array, default: null }, title: String })
 const router = useRouter()
 const emit = defineEmits(['changed'])
 const items = ref([]), busy = ref(false), selected = ref(null)
 const displayedItems = computed(() => props.requests ?? items.value)
 const kinds = {
+  teacher_registration: '教师注册',
   course_create: '新增课程', course_update: '修改课程安排',
   session_update: '单次调课', course_cancel: '取消课程',
   enrollment_remove: '移除课程学生', name_change: '修改姓名', password_reset: '重置密码', avatar_change: '更换头像',
@@ -19,14 +21,20 @@ const labels = {
   reason: '原因', date: '日期', start: '开始时间', end: '结束时间', location: '地点',
   repeat: '重复方式', interval: '重复间隔', weekdays: '上课日', until: '结束日期',
 }
-function fields(payload) {
+function fields({ kind, payload }) {
   return Object.entries({ ...payload, ...payload.schedule })
     .filter(([key]) => !['schedule', 'revision', 'imageId', 'photoConsent'].includes(key))
     .map(([key, value]) => {
       if (key === 'repeat') value = { once: '不重复', daily: '按天', weekly: '按周' }[value] || value
       if (key === 'weekdays') value = value.map(day => '周' + '日一二三四五六'[day]).join('、')
-      return [labels[key] || key, value]
+      const label = kind === 'teacher_registration'
+        ? { name: '姓名', teacher_no: '工号' }[key]
+        : labels[key]
+      return [label || key, value]
     })
+}
+function formatTimestamp(value) {
+  return value ? `${dateKey(value)} ${formatTime(value)}` : '—'
 }
 const states = { pending: '待审核', approved: '已批准', rejected: '已拒绝' }
 async function load() { if (props.requests !== null) return; try { items.value = (await api('/requests')).items } catch (e) { ElMessage.error(e.message) } }
@@ -55,6 +63,9 @@ defineExpose({ load })
       </el-table-column>
       <el-table-column label="状态">
         <template #default="{ row }">{{ states[row.status] }}</template>
+      </el-table-column>
+      <el-table-column label="申请时间" min-width="145">
+        <template #default="{ row }">{{ formatTimestamp(row.created_at) }}</template>
       </el-table-column>
       <el-table-column prop="review_note" label="审核说明" />
       <el-table-column label="操作" min-width="200">
@@ -85,14 +96,19 @@ defineExpose({ load })
     width="min(640px, 94vw)" @close="selected = null"
   >
     <template v-if="selected">
-      <p>申请人：{{ selected.username }} · {{ kinds[selected.kind] }}</p>
-      <p>申请时间：{{ selected.created_at }}；审核时间：{{ selected.reviewed_at || '尚未审核' }}</p>
       <el-image :key="selected.payload.imageId" v-if="selected.kind === 'avatar_change' && selected.status !== 'rejected'" :src="`/api/avatar-images/${selected.payload.imageId}`" alt="申请头像" fit="contain" style="max-width: 100%; max-height: 320px">
         <template #error><p>照片已清理或暂时无法加载，请刷新后重试。</p></template>
       </el-image>
       <el-descriptions :column="1" border>
+        <el-descriptions-item label="申请人">{{ selected.username }}</el-descriptions-item>
+        <el-descriptions-item label="类型">{{ kinds[selected.kind] }}</el-descriptions-item>
+        <el-descriptions-item label="状态">{{ states[selected.status] }}</el-descriptions-item>
+        <el-descriptions-item label="申请时间">{{ formatTimestamp(selected.created_at) }}</el-descriptions-item>
+        <el-descriptions-item v-if="selected.reviewed_at" label="审核时间">
+          {{ formatTimestamp(selected.reviewed_at) }}
+        </el-descriptions-item>
         <el-descriptions-item
-          v-for="[label, value] in fields(selected.payload)"
+          v-for="[label, value] in fields(selected)"
           :key="label" :label="label"
         >{{ value }}</el-descriptions-item>
       </el-descriptions>

@@ -2,6 +2,7 @@
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '@/api.js'
+import { courseClassLabel } from '@/dashboard.js'
 
 const props = defineProps({ modelValue: Boolean, classes: Array, initialClassId: Number })
 const emit = defineEmits(['update:modelValue', 'saved'])
@@ -140,7 +141,7 @@ onUnmounted(() => {
         <el-select v-model="classId" :disabled="busy" placeholder="请选择课程" @change="changeClass">
           <el-option
             v-for="course in activeClasses" :key="course.id" :value="course.id"
-            :label="`${course.course_name} · ${course.name}`"
+            :label="courseClassLabel(course)"
           />
         </el-select>
       </el-form-item>
@@ -156,7 +157,7 @@ onUnmounted(() => {
       <template #default><el-button link type="primary" @click="load">重新加载</el-button></template>
     </el-alert>
     <div class="list-heading">
-      <span>{{ query ? '搜索结果' : '全部有效学生' }} · {{ total }} 人</span>
+      <span>{{ query ? '找到' : '共' }} {{ total }} 名学生</span>
       <el-button :disabled="busy || loading || !classId" @click="load">刷新名单</el-button>
     </div>
     <el-table

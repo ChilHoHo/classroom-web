@@ -55,7 +55,7 @@ watch(() => props.course, load, { immediate: true })
 <template>
   <div class="student-list">
     <div class="list-heading">
-      <span>学生名单 · {{ items.length }} 人</span>
+      <span>共 {{ items.length }} 名学生</span>
       <el-button :loading="loading" @click="load">刷新名单</el-button>
     </div>
     <el-alert v-if="error" type="error" :title="error" :closable="false" />

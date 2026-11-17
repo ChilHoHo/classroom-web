@@ -14,7 +14,7 @@ import AccountSettings from '@/components/AccountSettings.vue'
 import StudentEnrollmentDialog from '@/components/StudentEnrollmentDialog.vue'
 import { user } from '@/auth.js'
 import api from '@/api.js'
-import { dateKey, formatDate, formatTime, roleNames, statusNames } from '@/dashboard.js'
+import { courseClassLabel, dateKey, formatDate, formatTime, roleNames, statusNames } from '@/dashboard.js'
 
 const route = useRoute(), router = useRouter()
 const loading = ref(false), error = ref(''), saving = ref(false), search = ref('')
@@ -34,9 +34,9 @@ const today = computed(() => sessions.value.filter((s) => activeClasses.value.so
 const ongoing = computed(() => today.value.filter((s) => Date.parse(s.start_at) <= clock.value && Date.parse(s.end_at) > clock.value))
 const requests = ref([])
 const pendingRequests = computed(() => requests.value.filter((r) => r.status === 'pending'))
-const pendingCount = computed(() => pending.value.length + pendingRequests.value.length)
-const pending = computed(() => users.value.filter((u) => u.status === 'pending'))
+const pendingCount = computed(() => pendingRequests.value.length)
 const courseFor = (id) => classes.value.find((c) => c.id === id)
+const scheduledClassIds = computed(() => new Set(sessions.value.map((session) => session.teaching_class_id)))
 const nextSession = (id) => sessions.value.find((s) => s.teaching_class_id === id && Date.parse(s.end_at) > clock.value)
 const shownClasses = computed(() => activeClasses.value.filter((c) => `${c.course_name} ${c.english_name || ''} ${c.name}`.toLowerCase().includes(search.value.toLowerCase())))
 const shownUsers = computed(() => users.value.filter((u) => u.username.toLowerCase().includes(search.value.toLowerCase())))
@@ -69,9 +69,14 @@ async function execute(fn, message) {
   saving.value = true
   try { await fn(); ElMessage.success(message); await refresh(); return true } catch (e) { ElMessage.error(e.message); return false } finally { saving.value = false }
 }
-async function approve(u, status) {
-  try { await ElMessageBox.confirm(`${status === 'active' ? '批准 / 启用' : '拒绝 / 停用'}账号「${u.username}」？`, '确认账户操作', { type: 'warning' }) } catch { return }
-  await execute(() => api(`/users/${u.id}`, { method: 'PATCH', body: JSON.stringify({ status }) }), '账户状态已更新')
+async function changeAccountStatus(user, status) {
+  const action = status === 'active' ? '启用' : '停用'
+  try {
+    await ElMessageBox.confirm(`确定${action}账号「${user.username}」？`, '确认账户操作', { type: 'warning' })
+  } catch { return }
+  await execute(() => api(`/users/${user.id}`, {
+    method: 'PATCH', body: JSON.stringify({ status }),
+  }), '账户状态已更新')
 }
 async function cancelCourse(c) {
   let reason
@@ -105,15 +110,13 @@ async function createTask() {
         <div class="sidebar-caption">SAM-LAB CLASSROOM<br><span>让每一堂课井然有序</span></div>
       </aside>
       <main v-loading="loading" class="dashboard-main">
-        <div class="page-heading"><div><el-breadcrumb separator="/"><el-breadcrumb-item>{{ roleNames[role] }}工作台</el-breadcrumb-item><el-breadcrumb-item>{{ pageTitle }}</el-breadcrumb-item></el-breadcrumb><h1>{{ pageTitle }}</h1><p>{{ formatDate(clock) }} · 北京时间</p></div><div class="heading-actions"><el-button :loading="loading" @click="refresh">刷新</el-button><el-button v-if="role === 'teacher'" type="primary" @click="edit()">＋ 添加课程</el-button></div></div>
+        <div class="page-heading"><div><el-breadcrumb separator="/"><el-breadcrumb-item>{{ roleNames[role] }}工作台</el-breadcrumb-item><el-breadcrumb-item>{{ pageTitle }}</el-breadcrumb-item></el-breadcrumb><h1>{{ pageTitle }}</h1><p>{{ formatDate(clock) }}</p></div><div class="heading-actions"><el-button :loading="loading" @click="refresh">刷新</el-button><el-button v-if="role === 'teacher'" type="primary" @click="edit()">＋ 添加课程</el-button></div></div>
         <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="section-gap"><template #default><el-button link type="primary" @click="refresh">重新加载</el-button></template></el-alert>
         <template v-if="!section">
           <template v-if="role === 'admin'">
             <el-card shadow="never" class="important-card"><template #header><div class="section-heading"><h2>重要信息</h2><el-tag :type="pendingCount ? 'warning' : 'success'">{{ pendingCount ? `${pendingCount} 项待处理` : '暂无待办' }}</el-tag></div></template>
-              <el-alert title="教师注册审批" :description="pending.length ? '请核实身份后审批' : '暂无待审核教师'" :type="pending.length ? 'warning' : 'success'" show-icon :closable="false" />
-              <el-table v-if="pending.length" :data="pending"><el-table-column prop="username" label="教师账号" /><el-table-column prop="created_at" label="申请时间" /><el-table-column label="操作" width="160"><template #default="{ row }"><el-button link type="primary" :disabled="saving" @click="approve(row, 'active')">批准</el-button><el-button link type="danger" :disabled="saving" @click="approve(row, 'disabled')">拒绝</el-button></template></el-table-column></el-table>
               <RequestPanel admin :requests="pendingRequests" title="待处理申请" @changed="refresh" />
-              <el-button link type="primary" @click="navigate('requests')">查看全部申请与审核历史 →</el-button>
+              <el-button link type="primary" @click="navigate('requests')">查看全部申请与审核历史</el-button>
             </el-card>
           </template>
           <template v-else>
@@ -127,10 +130,31 @@ async function createTask() {
           <el-card v-if="role === 'admin'" shadow="never" class="section-gap"><template #header><h2>最近系统活动</h2></template><el-table :data="logs" empty-text="暂无操作记录"><el-table-column prop="action" label="操作" /><el-table-column prop="resource_type" label="资源" /><el-table-column prop="actor_id" label="操作人 ID" width="110" /><el-table-column label="时间"><template #default="{ row }">{{ dateKey(row.created_at) }} {{ formatTime(row.created_at) }}</template></el-table-column></el-table></el-card>
           <el-card v-if="role === 'teacher'" shadow="never" class="section-gap"><template #header><h2>今日课程安排</h2></template><el-table :data="today" empty-text="今天暂无课次"><el-table-column label="课程"><template #default="{ row }">{{ courseFor(row.teaching_class_id)?.course_name }}</template></el-table-column><el-table-column label="时间"><template #default="{ row }">{{ formatTime(row.start_at) }}–{{ formatTime(row.end_at) }}</template></el-table-column><el-table-column prop="location" label="地点" /><el-table-column label="操作"><template #default="{ row }"><el-button link type="primary" @click="details = courseFor(row.teaching_class_id)">查看 / 调课</el-button></template></el-table-column></el-table></el-card>
         </template>
-        <el-card v-if="section === 'users' && role === 'admin'" shadow="never"><template #header><div class="section-heading"><h2>账户列表</h2><el-input v-model="search" class="search-input" placeholder="搜索账号" clearable /></div></template><el-table :data="shownUsers" empty-text="暂无用户"><el-table-column prop="username" label="账号" /><el-table-column label="角色"><template #default="{ row }">{{ roleNames[row.role] }}</template></el-table-column><el-table-column label="状态"><template #default="{ row }"><el-tag :type="row.status === 'active' ? 'success' : 'warning'">{{ statusNames[row.status] }}</el-tag></template></el-table-column><el-table-column label="操作"><template #default="{ row }"><el-button v-if="row.role !== 'admin'" link :type="row.status === 'active' ? 'danger' : 'primary'" :disabled="saving" @click="approve(row, row.status === 'active' ? 'disabled' : 'active')">{{ row.status === 'active' ? '停用' : '批准 / 启用' }}</el-button></template></el-table-column></el-table></el-card>
-        <template v-if="section === 'courses'"><div class="section-heading"><h2>{{ role === 'student' ? '我的课程' : '教学班与课程安排' }}</h2><el-input v-model="search" class="search-input" placeholder="搜索课程或教学班" clearable /></div><div class="course-grid section-gap"><CourseCard v-for="c in shownClasses" :key="c.id" :course="c" :session="nextSession(c.id)" :now="clock" @details="details = $event" /></div><el-empty v-if="!shownClasses.length" :description="search ? '没有匹配的课程' : '暂无课程，添加课程或联系教师加入教学班'" /></template>
+        <el-card v-if="section === 'users' && role === 'admin'" shadow="never"><template #header><div class="section-heading"><h2>账户列表</h2><el-input v-model="search" class="search-input" placeholder="搜索账号" clearable /></div></template><el-table :data="shownUsers" empty-text="暂无用户"><el-table-column prop="username" label="账号" /><el-table-column label="角色"><template #default="{ row }">{{ roleNames[row.role] }}</template></el-table-column><el-table-column label="状态"><template #default="{ row }"><el-tag :type="row.status === 'active' ? 'success' : 'warning'">{{ statusNames[row.status] }}</el-tag></template></el-table-column><el-table-column label="操作"><template #default="{ row }"><el-button
+          v-if="row.role !== 'admin' && row.status !== 'pending'" link
+          :type="row.status === 'active' ? 'danger' : 'primary'" :disabled="saving"
+          @click="changeAccountStatus(row, row.status === 'active' ? 'disabled' : 'active')"
+        >{{ row.status === 'active' ? '停用' : '启用' }}</el-button></template></el-table-column></el-table></el-card>
+        <template v-if="section === 'courses'">
+          <div class="section-heading">
+            <h2>{{ role === 'student' ? '我的课程' : '教学班与课程安排' }}</h2>
+            <el-input v-model="search" class="search-input" placeholder="搜索课程或教学班" clearable />
+          </div>
+          <div class="course-grid section-gap">
+            <CourseCard
+              v-for="course in shownClasses" :key="course.id" :course="course"
+              :session="nextSession(course.id)" :now="clock"
+              :has-scheduled-sessions="scheduledClassIds.has(course.id)"
+              @details="details = $event"
+            />
+          </div>
+          <el-empty v-if="!shownClasses.length" :description="search ? '没有匹配的课程' : '暂无课程，添加课程或联系教师加入教学班'" />
+        </template>
         <AttendancePanel v-if="section === 'attendance' && role !== 'admin'" :role="role" :classes="classes" :tasks="tasks" :records="records" @refresh="refresh" />
-        <RequestPanel v-if="section === 'requests'" :admin="role === 'admin'" @changed="refresh" />
+        <RequestPanel
+          v-if="section === 'requests'" :admin="role === 'admin'"
+          :requests="role === 'admin' ? requests : null" @changed="refresh"
+        />
         <UserManagement v-if="section === 'users' && role === 'admin'" :accounts="users" @changed="refresh" />
         <CourseNotifications v-if="role === 'student'" :key="user.id" @changed="refresh" />
         <AccountSettings v-if="section === 'settings'" />
@@ -145,7 +169,7 @@ async function createTask() {
     <StudentEnrollmentDialog
       v-model="enrollment" :classes="classes" :initial-class-id="targetClass" @saved="refresh"
     />
-    <el-dialog v-model="launch" title="发起考勤" width="min(480px, 94vw)" :close-on-click-modal="false"><el-form label-position="top"><el-form-item label="课程 / 教学班"><el-select v-model="launchClass" placeholder="请选择课程"><el-option v-for="c in activeClasses" :key="c.id" :value="c.id" :label="`${c.course_name} · ${c.name}`" /></el-select></el-form-item><el-form-item label="签到时长（分钟）"><el-input-number v-model="duration" :min="1" :max="180" :precision="0" /></el-form-item><el-form-item label="开始后多少分钟记为迟到"><el-input-number v-model="lateMinutes" :min="0" :max="duration || 180" :precision="0" /></el-form-item><el-alert title="确认后立即开始考勤" type="info" :closable="false" /></el-form><template #footer><el-button :disabled="saving" @click="launch = false">取消</el-button><el-button type="primary" :loading="saving" @click="createTask">开始考勤</el-button></template></el-dialog>
+    <el-dialog v-model="launch" title="发起考勤" width="min(480px, 94vw)" :close-on-click-modal="false"><el-form label-position="top"><el-form-item label="课程 / 教学班"><el-select v-model="launchClass" placeholder="请选择课程"><el-option v-for="c in activeClasses" :key="c.id" :value="c.id" :label="courseClassLabel(c)" /></el-select></el-form-item><el-form-item label="签到时长（分钟）"><el-input-number v-model="duration" :min="1" :max="180" :precision="0" /></el-form-item><el-form-item label="开始后多少分钟记为迟到"><el-input-number v-model="lateMinutes" :min="0" :max="duration || 180" :precision="0" /></el-form-item><el-alert title="确认后立即开始考勤" type="info" :closable="false" /></el-form><template #footer><el-button :disabled="saving" @click="launch = false">取消</el-button><el-button type="primary" :loading="saving" @click="createTask">开始考勤</el-button></template></el-dialog>
   </el-container>
 </template>
 
