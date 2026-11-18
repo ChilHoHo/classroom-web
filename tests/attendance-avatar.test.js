@@ -1,19 +1,24 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
+import { initializeApp, deleteApp } from 'firebase-admin/app'
+import { getMessaging } from 'firebase-admin/messaging'
 import { base, db, client, createUser } from './helpers/account-api.js'
+import { deliverAttendancePush } from '../server/push.js'
 
 process.env.COMPREFACE_URL = 'http://attendance-face.test'
 process.env.COMPREFACE_API_KEY = 'test'
 const realFetch = globalThis.fetch
-let subject, registeredBytes, mode = 'match', registrations = 0, changeDuringRecognition, sampleMissing = false
+let subject, registeredBytes, mode = 'match', registrations = 0, changeDuringRecognition, sampleMissing = false, beforeSampleQuery
 const jpeg = Buffer.from([255,216,255,3,4])
 globalThis.fetch = async (url, options) => {
   if (!String(url).startsWith(process.env.COMPREFACE_URL)) return realFetch(url, options)
   const u = new URL(url)
   if (mode === 'outage') return Response.json({}, { status: 503 })
   if (options.method === 'DELETE') return Response.json({})
-  if (options.method === 'GET' && u.pathname.endsWith('/faces'))
+  if (options.method === 'GET' && u.pathname.endsWith('/faces')) {
+    if (beforeSampleQuery) await beforeSampleQuery()
     return Response.json({ faces: !sampleMissing && subject === u.searchParams.get('subject') ? [{ subject, image_id: 'registered' }] : [] })
+  }
   if (u.pathname.endsWith('/faces')) {
     registrations++; subject = u.searchParams.get('subject')
     sampleMissing = false
@@ -81,9 +86,25 @@ test('Android-only attendance uses approved avatar, complete roster, updates, fa
   assert.equal(registration.status, 201)
   assert.ok(registeredBytes.equals(approved))
   assert.equal((await android.request('/faces/me')).ready, true)
-  await check(android, t.id, 201); await check(android, t.id, 409)
+  let sampleStarted, releaseSample
+  const queried = new Promise(resolve => { sampleStarted = resolve })
+  const holdSample = new Promise(resolve => { releaseSample = resolve })
+  beforeSampleQuery = () => { sampleStarted(); return holdSample }
+  const checking = check(android, t.id, 201)
+  try {
+    await Promise.race([queried, checking])
+    const response = await realFetch(base + '/courses', { headers: { Cookie: teacher.cookie }, signal: AbortSignal.timeout(2000) })
+    assert.equal(response.status, 200)
+  } finally {
+    beforeSampleQuery = null
+    releaseSample()
+    await checking
+  }
+  await check(android, t.id, 409)
   assert.equal((await android.request('/attendance-tasks/available')).items.length, 0)
-  assert.ok((await web.request('/notifications')).items.some(item => item.message.includes('已发起人脸考勤')))
+  const notice = (await web.request('/notifications')).items.find(item => item.message.includes('已发起人脸考勤'))
+  assert.ok(notice)
+  assert.doesNotMatch(notice.message, /北京时间/)
   await teacher.request('/attendance-tasks', 'POST', { teaching_class_id: cls.id, start_at: new Date(Date.now()-1000).toISOString(), late_at: new Date(Date.now()+30000).toISOString(), end_at: new Date(Date.now()+60000).toISOString() }, 409)
   roster = await teacher.request(`/attendance-tasks/${t.id}/records`)
   assert.equal(roster.counts.present, 1); assert.equal(roster.counts.unrecorded, 1)
@@ -92,7 +113,25 @@ test('Android-only attendance uses approved avatar, complete roster, updates, fa
   assert.equal((await db.get('SELECT after_status FROM review_records WHERE attendance_record_id=?', [revised.id])).after_status, 'late')
   const replacement = Buffer.from([255,216,255,8,8]); await approve(replacement)
   assert.equal((await android.request('/faces/me')).ready, false)
-  const second = await task(); await check(android, second.id, 201)
+  const second = await task()
+  await db.run("UPDATE push_deliveries SET status='sending', available_at=? WHERE task_id=?", [new Date(Date.now()-1000).toISOString(), second.id])
+  await android.request('/auth/refresh', 'POST', {})
+  const app = initializeApp({ projectId: 'classroom-test' })
+  const messaging = getMessaging(app)
+  const sent = []
+  messaging.send = async message => { sent.push(message); return 'test-message-id' }
+  const previousProjectId = process.env.FIREBASE_PROJECT_ID
+  process.env.FIREBASE_PROJECT_ID = 'classroom-test'
+  try {
+    await deliverAttendancePush()
+    assert.equal((await db.get('SELECT status FROM push_deliveries WHERE task_id=?', [second.id])).status, 'sent')
+    assert.deepEqual(sent.map(message => [message.data.taskId, message.token]), [[String(second.id), 'test-device-token']])
+  } finally {
+    if (previousProjectId === undefined) delete process.env.FIREBASE_PROJECT_ID
+    else process.env.FIREBASE_PROJECT_ID = previousProjectId
+    await deleteApp(app)
+  }
+  await check(android, second.id, 201)
   assert.ok(registeredBytes.equals(replacement)); assert.equal(registrations, 2)
   sampleMissing = true
   assert.equal((await android.request('/faces/me')).ready, false)

@@ -81,16 +81,30 @@ async function referenceExists(subject) {
   return data.faces.some(face => face.subject === subject && typeof face.image_id === 'string' && face.image_id)
 }
 async function registerApprovedAvatar(req, s) {
+  // SQLite serializes database work while a transaction is open. Probe the
+  // remote sample before taking locks, then check the observed profile again.
+  if (!await hasConsent(s.id)) fail(403, '请先单独同意人脸信息处理', 'CONSENT_REQUIRED')
+  const observedUser = await db.get('SELECT id,avatar,status FROM users WHERE id=?', [req.user.id])
+  if (observedUser?.status !== 'active') fail(403, '账号不可用')
+  const observed = await db.get('SELECT * FROM face_profiles WHERE student_id=?', [s.id])
+  const observedSubject = avatarSubject(observedUser).subject
+  const samplePresent = observed?.status === 'active' && observed.subject_key === observedSubject
+    && await referenceExists(observedSubject)
   const result = await db.transaction(async () => {
     const user = await db.get('SELECT id,avatar,status FROM users WHERE id=?' + db.lock, [req.user.id])
     if (user?.status !== 'active') fail(403, '账号不可用')
     await db.get('SELECT id FROM students WHERE id=?' + db.lock, [s.id])
     if (!await hasConsent(s.id, true)) fail(403, '请先单独同意人脸信息处理', 'CONSENT_REQUIRED')
     const { imageId, subject } = avatarSubject(user)
+    if (subject !== observedSubject) fail(409, '头像已变更，请重试', 'AVATAR_CHANGED')
+    let profile = await db.get('SELECT * FROM face_profiles WHERE student_id=?' + db.lock, [s.id])
+    if (profile?.id !== observed?.id || profile?.status !== observed?.status ||
+      profile?.subject_key !== observed?.subject_key || profile?.registered_at !== observed?.registered_at) {
+      fail(409, '人脸资料已变更，请重试')
+    }
+    if (samplePresent) return { profile }
     const image = await db.get('SELECT mime_type,image_data FROM avatar_images WHERE id=? AND user_id=?', [imageId, user.id])
     if (!image) fail(409, '审核头像不可用，请重新提交头像申请', 'AVATAR_REQUIRED')
-    let profile = await db.get('SELECT * FROM face_profiles WHERE student_id=?' + db.lock, [s.id])
-    if (profile?.status === 'active' && profile.subject_key === subject && await referenceExists(subject)) return { profile }
     const oldSubject = profile?.subject_key
     if (!profile) {
       const row = await db.run("INSERT INTO face_profiles(student_id,subject_key,status) VALUES (?,?,'pending_delete')", [s.id, subject])

@@ -1,4 +1,5 @@
 import { test, after } from 'node:test'
+import assert from 'node:assert/strict'
 import { mkdir } from 'node:fs/promises'
 import { chromium, expect } from '@playwright/test'
 import { base, db, client, createUser } from '../helpers/account-api.js'
@@ -22,13 +23,30 @@ test('teacher launches attendance, sees full roster, refreshes, searches and fin
   await context.addCookies([{ name: 'connect.sid', value: teacher.cookie.slice('connect.sid='.length), url: origin }])
   const page = await context.newPage(); page.setDefaultTimeout(8000)
   const errors = []; page.on('pageerror', e => errors.push(e.message))
+  const student = client()
+  await student.login('browser_att_student1')
+  const studentId = (await db.get('SELECT user_id FROM students WHERE id=?', [students[0].id])).user_id
+  for (let i = 1; i <= 3; i++) {
+    await db.run('INSERT INTO notifications(user_id,message,created_at) VALUES (?,?,?)', [studentId, `已有课程通知 ${i}`, new Date().toISOString()])
+  }
+  const studentContext = await browser.newContext()
+  await studentContext.addCookies([{ name: 'connect.sid', value: student.cookie.slice('connect.sid='.length), url: origin }])
+  const studentPage = await studentContext.newPage()
+  await studentPage.goto(origin + '/#/dashboard')
+  await expect(studentPage.getByText(/^已有课程通知 [1-3]$/)).toHaveCount(3)
   await page.goto(origin + '/#/dashboard')
   await page.getByRole('button', { name: '发起人脸考勤', exact: true }).click()
   await page.getByRole('button', { name: '开始考勤', exact: true }).click()
   await expect(page.getByText('考勤已开始', { exact: true })).toBeVisible()
+  await expect(studentPage.getByText('考勤通知', { exact: true })).toBeVisible({ timeout: 10000 })
+  await expect(studentPage.getByText(/已发起人脸考勤.*截止时间/)).toBeVisible()
+  const notices = (await student.request('/notifications')).items
+  assert.equal(notices.filter(item => item.message.startsWith('已有课程通知')).length, 3)
+  await studentContext.close()
   await page.goto(origin + '/#/dashboard/attendance')
   await page.getByRole('button', { name: '记录 / 复核', exact: true }).click()
   await expect(page.getByRole('cell', { name: '未签到', exact: true })).toHaveCount(2)
+  await expect(page.getByText(/未签到不代表最终缺勤/)).toHaveCount(0)
   const task = (await teacher.request('/attendance-tasks')).items[0]
   await teacher.request(`/attendance-tasks/${task.id}/manual`, 'POST', { student_id: students[0].id, status: 'present', reason: '浏览器测试模拟已签到记录' }, 201)
   // No user refresh: exercise the polling path.

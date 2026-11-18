@@ -121,7 +121,7 @@ business.post('/attendance-tasks', teacher, async (req, res) => {
     const overlap = await db.get("SELECT id FROM attendance_tasks WHERE teaching_class_id=? AND status IN ('active','paused') AND start_at<? AND end_at>? LIMIT 1" + db.lock, [classroom.id, end, start])
     if (overlap) fail(409, '该教学班已有同时段考勤，请先结束已有考勤', 'TASK_CONFLICT')
     const row = await db.run('INSERT INTO attendance_tasks(teaching_class_id,start_at,late_at,end_at) VALUES (?,?,?,?)', [classroom.id, start, late, end])
-    await notifyClass(classroom.id, `已发起人脸考勤，请在安卓 App 现场拍照签到，截止时间 ${new Date(end).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}（北京时间）。`)
+    await notifyClass(classroom.id, `已发起人脸考勤，请在安卓 App 现场拍照签到，截止时间 ${new Date(end).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}。`)
     await queueAttendancePush(row.insertId, classroom.id)
     return row
   })

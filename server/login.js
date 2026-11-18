@@ -67,7 +67,7 @@ export async function refreshSession(req) {
     const oldSession = req.sessionID
     await saveSession(req, user, clientType(req.session), req.session.createdAt)
     await db.run('UPDATE push_devices SET session_id=? WHERE session_id=?', [req.sessionID, oldSession])
-    await db.run("UPDATE push_deliveries SET session_id=? WHERE session_id=? AND status='pending'", [req.sessionID, oldSession])
+    await db.run("UPDATE push_deliveries SET session_id=? WHERE session_id=? AND status IN ('pending','sending')", [req.sessionID, oldSession])
     return user
   })
 }

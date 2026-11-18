@@ -84,7 +84,7 @@ async function save() {
     <template v-if="selected">
     <div class="record-heading"><h3>任务 #{{ selected.id }}，考勤记录</h3><el-button :disabled="loading" @click="view(selected)">刷新名单</el-button><el-button type="primary" plain :disabled="busy" @click="openManual()">人工登记 / 请假</el-button></div>
     <template v-if="role === 'teacher' && selected">
-      <p class="note">{{ live ? '名单每 5 秒自动刷新；签到结束前，未签到不代表最终缺勤。' : '考勤已结束。' }} {{ updatedAt ? `最近更新：${updatedAt}` : '' }}</p>
+      <p class="note">{{ live ? '名单每 5 秒自动刷新。' : '考勤已结束。' }} {{ updatedAt ? `最近更新：${updatedAt}` : '' }}</p>
       <div class="attendance-summary"><span v-for="[label, count] in summary" :key="label">{{ label }} <strong>{{ count }}</strong></span></div>
       <div class="record-filters"><el-input v-model="search" placeholder="搜索姓名或学号" clearable aria-label="搜索学生" /><el-select v-model="filter" placeholder="全部状态" clearable aria-label="筛选签到状态"><el-option v-for="state in ['unrecorded','present','late','exception','absent','leave']" :key="state" :value="state" :label="statusNames[state]" /></el-select></div>
     </template>
